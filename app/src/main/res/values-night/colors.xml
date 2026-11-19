@@ -1,0 +1,15 @@
+<resources>
+    <color name="ui_primary">#B9C4FF</color>
+    <color name="ui_on_primary">#132A75</color>
+    <color name="ui_primary_container">#2C408C</color>
+    <color name="ui_on_primary_container">#DEE3FF</color>
+    <color name="ui_secondary_container">#424659</color>
+    <color name="ui_on_secondary_container">#E1E2F0</color>
+    <color name="ui_surface">#121318</color>
+    <color name="ui_on_surface">#E3E2E9</color>
+    <color name="ui_surface_variant">#45464F</color>
+    <color name="ui_on_surface_variant">#C6C6D1</color>
+    <color name="ui_outline">#8F909A</color>
+    <color name="ui_outline_variant">#45464F</color>
+    <bool name="ui_light_bars">false</bool>
+</resources>

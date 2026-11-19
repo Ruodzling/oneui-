@@ -1,0 +1,4 @@
+<resources>
+    <item name="version_entry" type="id" />
+    <item name="demo_input" type="id" />
+</resources>

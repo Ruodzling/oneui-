@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">One UI 小窗补全计划</string>
+    <string name="app_author">by 酷安 若冬之冷</string>
+    <string name="author_url">https://www.coolapk.com/u/2970139</string>
+    <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/ui_primary</item>
+        <item name="colorOnPrimary">@color/ui_on_primary</item>
+        <item name="colorPrimaryContainer">@color/ui_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/ui_on_primary_container</item>
+        <item name="colorSecondaryContainer">@color/ui_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/ui_on_secondary_container</item>
+        <item name="colorSurface">@color/ui_surface</item>
+        <item name="colorOnSurface">@color/ui_on_surface</item>
+        <item name="colorSurfaceVariant">@color/ui_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/ui_on_surface_variant</item>
+        <item name="colorOutline">@color/ui_outline</item>
+        <item name="colorOutlineVariant">@color/ui_outline_variant</item>
+        <item name="android:colorBackground">@color/ui_surface</item>
+        <item name="android:windowBackground">@color/ui_surface</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightStatusBar">@bool/ui_light_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/ui_light_bars</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+    <style name="ProbeTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#246BFD</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#F4F6FA</item>
+    </style>
+    <string-array name="xposed_scope">
+        <item>io.github.s24u.popupscale</item>
+        <item>com.coolapk.market</item>
+        <item>com.tencent.mm</item>
+        <item>tv.danmaku.bili</item>
+        <item>com.ss.android.ugc.aweme</item>
+        <item>com.sina.weibo</item>
+        <item>com.tencent.mobileqq</item>
+        <item>com.tencent.tim</item>
+        <item>com.google.android.permissioncontroller</item>
+        <item>com.android.systemui</item>
+        <item>com.sec.android.app.launcher</item>
+        <item>com.samsung.android.sidegesturepad</item>
+        <item>android</item>
+    </string-array>
+</resources>
