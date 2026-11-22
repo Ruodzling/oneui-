@@ -71,11 +71,12 @@ class MiniTaskLease(private val context:Context,private val onAck:(Int)->Unit={}
         if(task>=0)send(-1,keepVisualTask=keepVisualTask)
         task=-1;taskUser=-1;preparingFullscreen=false;session="";acknowledged=0;waiting=null;nativeLayer=null;framelessCaption=0
     }
-    fun releaseVisual(taskId:Int) {
+    fun releaseVisual(taskId:Int,resyncLayers:Boolean=false) {
         if(taskId<0)return
         Guard.call("mini-lease-visual-end"){
             context.sendBroadcast(Intent(ACTION).setPackage("android")
                 .putExtra("task",-1).putExtra("endVisualTask",taskId)
+                .putExtra("resyncLayers",resyncLayers)
                 .putExtra("session",java.util.UUID.randomUUID().toString())
                 .putExtra("when",SystemClock.uptimeMillis()),
                 PERMISSION,BroadcastOptions.makeBasic().setShareIdentityEnabled(true).toBundle())

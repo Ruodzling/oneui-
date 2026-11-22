@@ -2,6 +2,10 @@ package io.github.s24u.popupscale.gestures
 
 object TaskOpacityPolicy {
     const val MAX_TRANSPARENCY=80
+    const val MAX_OPACITY=100
+    const val MIN_OPACITY=MAX_OPACITY-MAX_TRANSPARENCY
+    fun opacityPercent(transparency:Int)=MAX_OPACITY-transparency.coerceIn(0,MAX_TRANSPARENCY)
+    fun transparencyPercent(opacity:Int)=MAX_OPACITY-opacity.coerceIn(MIN_OPACITY,MAX_OPACITY)
     // A temporary visibility/keyguard boundary must not erase the user's chosen value.
     enum class Lifetime { DROP, SUSPEND, ACTIVE }
     fun lifetime(admitted:Boolean,visible:Boolean,locked:Boolean)=

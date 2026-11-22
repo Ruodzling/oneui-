@@ -1,24 +1,97 @@
 package io.github.s24u.popupscale
 
-/** Verified against Bilibili 9.17.0. Unknown callers retain the platform result. */
+/** Freeform video fullscreen compatibility for Bilibili across versions (9.17+ / 9.20+). */
 object PlayerCompatPolicy {
     const val PACKAGE="tv.danmaku.bili"
+    const val DETAIL_ACTIVITY="com.bilibili.ship.theseus.detail.UnitedBizDetailsActivity"
     private const val FULLSCREEN_WIDGET="com.bilibili.app.gemini.player.widget.story.GeminiPlayerFullscreenWidget"
     private const val FULLSCREEN_HELPER="jv0.d"
-    private const val HARDWARE_SERVICE="com.bilibili.playerbizcommon.features.hardware.HardwareService"
-    @JvmStatic fun playerCallerTypes()=arrayOf(FULLSCREEN_WIDGET,FULLSCREEN_HELPER,HARDWARE_SERVICE)
+    const val HARDWARE_SERVICE="com.bilibili.playerbizcommon.features.hardware.HardwareService"
+
+    @JvmStatic fun playerCallerTypes()=arrayOf(
+        FULLSCREEN_WIDGET, HARDWARE_SERVICE, DETAIL_ACTIVITY, FULLSCREEN_HELPER)
+
     @JvmStatic fun eligible(pkg:String,enabled:Boolean,diagnostic:Boolean,selected:Boolean,mode:Int)=
         pkg==PACKAGE&&enabled&&!diagnostic&&selected&&mode==5
 
-    @JvmStatic fun playerCaller(type:String,method:String):Boolean = when(type){
-        FULLSCREEN_WIDGET -> method=="n"
-        FULLSCREEN_HELPER -> method=="a"
-        HARDWARE_SERVICE -> method=="onConfigurationChanged"
-        else -> false
+    private fun simpleName(type:String):String {
+        val dot=type.lastIndexOf('.')
+        return if(dot>=0)type.substring(dot+1) else type
     }
 
-    @JvmStatic fun playerActivity(pkg:String,name:String)=pkg==PACKAGE&&name in setOf(
-        "com.bilibili.ship.theseus.detail.UnitedBizDetailsActivity")
+    private fun isHookPlumbing(type:String,method:String):Boolean {
+        if(type=="java.lang.Thread"||type.startsWith("de.robv.android.xposed.")||
+            type.startsWith("io.github.libxposed.")||type.startsWith("LSPHooker_")||
+            type=="J"||type.startsWith("java.lang.reflect."))return true
+        if(type=="android.app.Activity"&&method=="isInMultiWindowMode")return true
+        if(type=="io.github.s24u.popupscale.PopupScaleModule"||
+            type.startsWith("io.github.s24u.popupscale.PopupScaleModule\$"))return true
+        return false
+    }
+
+    private fun isFrameworkType(type:String)=
+        type.startsWith("android.")||type.startsWith("androidx.")||type.startsWith("com.android.")||
+            type.startsWith("com.samsung.")||type.startsWith("java.")||type.startsWith("javax.")||
+            type.startsWith("kotlin.")||type.startsWith("kotlinx.")||type.startsWith("dalvik.")||
+            type.startsWith("sun.")
+
+    @JvmStatic fun excludedCaller(type:String,method:String):Boolean {
+        if(type.startsWith("io.github.s24u.popupscale."))return true
+        if(type.startsWith("com.bilibili.playerbizcommon.features.background."))return true
+        if(type.startsWith("com.bilibili.search"))return true
+        if(type=="sw1.h"&&method=="then")return true
+        val simple=simpleName(type)
+        return simple.contains("BackgroundPlay")||simple.contains("SearchActivity")||
+            simple.contains("Clipboard")||simple.contains("ClipBoard")||
+            simple.contains("PictureInPicture")||simple.contains("PipManager")||
+            simple.contains("PipController")||simple.contains("PipHelper")
+    }
+
+    @JvmStatic fun playerCaller(type:String,method:String):Boolean {
+        if(excludedCaller(type,method))return false
+        if(type==FULLSCREEN_HELPER)return method=="a"
+        if(type==FULLSCREEN_WIDGET||type==HARDWARE_SERVICE)return true
+        if(type.startsWith("com.bilibili.app.gemini.player.")||
+            type.startsWith("com.bilibili.playerbizcommon.features.hardware.")||
+            type.startsWith("com.bilibili.playerbizcommon.features.fullscreen.")||
+            type.startsWith("com.bilibili.playerbizcommon.player.")||
+            type.startsWith("com.bilibili.ship.theseus.detail.")||
+            type.startsWith("com.bilibili.ship.theseus.united.")||
+            type.startsWith("tv.danmaku.biliplayer.")||
+            type.startsWith("tv.danmaku.biliplayerv2."))return true
+        if(type.startsWith("com.bilibili.")||type.startsWith("tv.danmaku.")){
+            val simple=simpleName(type)
+            if(simple.contains("Fullscreen")||simple.contains("FullScreen"))return true
+        }
+        return false
+    }
+
+    private fun isInteractiveTrigger(type:String,method:String):Boolean =
+        (type=="android.view.View"&&(method=="performClick"||method=="performLongClick"||
+            method=="dispatchTouchEvent"||method=="onTouchEvent"))||
+        ((type=="android.app.Activity"||type==DETAIL_ACTIVITY)&&
+            (method=="onConfigurationChanged"||method=="performConfigurationChanged"||
+                method=="dispatchConfigurationChanged"))
+
+    @JvmStatic fun shouldBypassStack(frames:Array<StackTraceElement>):Boolean =
+        shouldBypassFrames(frames.map{it.className to it.methodName})
+
+    @JvmStatic fun shouldBypassFrames(frames:List<Pair<String,String>>):Boolean {
+        var start=0
+        while(start<frames.size&&isHookPlumbing(frames[start].first,frames[start].second))start++
+        if(start>=frames.size)return false
+        val direct=frames[start]
+        if(isFrameworkType(direct.first))return false
+        var matched=false
+        for(i in start until frames.size){
+            val (type,method)=frames[i]
+            if(excludedCaller(type,method))return false
+            if(playerCaller(type,method)||isInteractiveTrigger(type,method))matched=true
+        }
+        return matched
+    }
+
+    @JvmStatic fun playerActivity(pkg:String,name:String)=pkg==PACKAGE&&name in setOf(DETAIL_ACTIVITY)
 
     /** The player already handles orientation/size; external density changes alone lose its
      * fullscreen state by relaunching the Activity. No other configuration bits are added. */

@@ -35,7 +35,7 @@ class NotificationRouteHooks(private val loader:ClassLoader,private val caps:Rom
         }
     }
     private fun fresh(r:Route)=SystemClock.uptimeMillis()-r.identity.created in 0..NotificationRouteIdentity.TTL
-    private fun enabled(pkg:String)=config.enabled&&!config.observe&&config.notificationPull&&config.accepts(pkg)
+    private fun enabled(pkg:String)=config.enabled&&!config.observe&&config.notificationPull&&config.acceptsInteraction(pkg)
     private fun transient(record:Any)=Guard.field(record,"mNoDisplay")==true||
         Guard.field(record,"finishing")==true||Guard.field(record,"firstWindowDrawn")==false
     private fun selected(route:Route)=fresh(route)&&enabled(route.identity.packageName)
@@ -72,7 +72,7 @@ class NotificationRouteHooks(private val loader:ClassLoader,private val caps:Rom
                     val display=X.callMethod(options,"getLaunchDisplayId") as Int
                     if(!NotificationRoutePolicy.accepts(Binder.getCallingUid(),systemUiUid(),id.uid,app.uid,creatorUid,
                             io.github.s24u.popupscale.CloneUserPolicy.supported(user),enabled(id.packageName),
-                            config.accepts(id.packageName),X.getIntField(key,"type")==2,mode,display,
+                            config.acceptsInteraction(id.packageName),X.getIntField(key,"type")==2,mode,display,
                             !c.getSystemService(KeyguardManager::class.java).isKeyguardLocked)){
                         Guard.info("notification route rejected owner=${id.packageName} targetUser=$user creator=$creator creatorUser=${creatorUid/100000} display=$display")
                         return@call

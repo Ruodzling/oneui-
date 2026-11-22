@@ -28,7 +28,8 @@ import de.robv.android.xposed.XposedHelpers as X
 class LiveMiniController(private val context:Context,private val backend:TaskBackend,
                          private val frame:TransitionFrameOverlay, private val released:(Int)->Unit,
                          private val journalKey:String="task",private val changed:(Int)->Unit={},
-                         private val stackTouch:(Int,MotionEvent)->Boolean={_,_->false}) {
+                         private val stackTouch:(Int,MotionEvent)->Boolean={_,_->false},
+                         private val expanded:(Int)->Unit={}) {
     private enum class Phase { IDLE, PREPARING, MINI, DRAGGING, SETTLING, DOCKED, CLOSING, RESTORING }
     private data class SurfacePin(val taskId:Int,val leash:Any,val scale:Float,val x:Float,val y:Float,
                                   val alpha:Float?,val crop:Rect,val layer:Int?=null,
@@ -111,6 +112,7 @@ class LiveMiniController(private val context:Context,private val backend:TaskBac
     fun isMini(taskId:Int)=id==taskId
     fun activeTaskId()=id
     fun status()="livePhase=$phase liveTask=$id liveProtected=$protected liveStandardDock=$dockedFromStandard liveRect=${target.toShortString()}"
+    fun diagnosticRect(taskId:Int):Rect?=if(taskId==id&&phase in setOf(Phase.MINI,Phase.DOCKED,Phase.DRAGGING,Phase.SETTLING))Rect(current) else null
     fun stackReady()=id>=0&&phase in setOf(Phase.MINI,Phase.DOCKED)&&!selecting&&!reflowPending
     fun stackMember()=MiniStackPolicy.participates(id,independentDock,
         phase in setOf(Phase.IDLE,Phase.RESTORING,Phase.CLOSING))
@@ -118,6 +120,16 @@ class LiveMiniController(private val context:Context,private val backend:TaskBac
     fun miniSize()=MiniStackPolicy.Size(miniSize.x,miniSize.y)
     fun nativeStackLayer()=stackNativeLayer ?: lease.nativeLayer
     fun miniRect()=Rect(current)
+    fun defaultMiniRect():Rect?=if(base.isEmpty)null else backend.miniBounds(base,false)
+    fun canHomeToDefault()=id>=0&&!stackControlled&&!independentDock&&phase==Phase.MINI&&!selecting
+    fun returnToDefaultCorner(){
+        if(!canHomeToDefault())return
+        refreshDisplay()
+        val dest=defaultMiniRect() ?: return
+        if(dest==current)return
+        Guard.info("live mini homing to default corner task=$id from=${current.toShortString()} to=${dest.toShortString()}")
+        settle(dest,false,220)
+    }
     fun expandStack(){restore(true)}
     fun lockStackTouch(locked:Boolean){
         if(stackTouchLocked==locked)return
@@ -136,16 +148,25 @@ class LiveMiniController(private val context:Context,private val backend:TaskBac
         if(playbackFrontChanged)updatePlaybackState()
         if(entering)showBadge(false)
         target=Rect(bounds)
-        touchable(front)
+        touchable(MiniStackPolicy.overlayTouchable(front,stackControlled))
         render(bounds,transaction=transaction)
     }
-    fun releaseStack(){
+    fun releaseStack(returnToDefault:Boolean=false){
         if(!stackControlled)return
         stackControlled=false;stackAlpha=1f;touchable(true)
         playbackStackFront=true
         updatePlaybackState()
         restoreStackLayer()
         if(stackReady()&&stackMember()){
+            if(returnToDefault){
+                refreshDisplay()
+                val dest=defaultMiniRect()
+                if(dest!=null&&dest!=current){
+                    Guard.info("live mini homing after stack expand task=$id from=${current.toShortString()} to=${dest.toShortString()}")
+                    settle(dest,false,220)
+                    return
+                }
+            }
             target=Rect(current.left,current.top,current.left+miniSize.x,current.top+miniSize.y)
             target.offsetTo(target.left.coerceIn(0,(sw-target.width()).coerceAtLeast(0)),
                 target.top.coerceIn(0,(sh-target.height()).coerceAtLeast(0)))
@@ -714,7 +735,7 @@ class LiveMiniController(private val context:Context,private val backend:TaskBac
     private fun restore(animated:Boolean,source:String="internal") {
         if(id<0){recoverIfNeeded();return}
         if(phase==Phase.RESTORING)return
-        restoreStackLayer()
+        if(MiniStackPolicy.restoreLayerBeforeExpand(animated))restoreStackLayer()
         stackTouchLocked=false;stackControlled=false;stackAlpha=1f;touchable(true)
         downActive=false;pendingDrag=null;closeHint.hide();showBadge(false);recycleVelocity()
         val keepVisual=animated&&surface!=null&&touch!=null
@@ -722,17 +743,21 @@ class LiveMiniController(private val context:Context,private val backend:TaskBac
         lease.release(if(keepVisual)id else -1);protected=false
         val g=++generation;val restoreId=id
         phase=Phase.RESTORING;started=SystemClock.uptimeMillis();animator?.cancel()
+        if(animated)Guard.call("live-expand-home"){expanded(restoreId)}
         val finish={
             resetSurface(restoreId)
-            if(keepVisual)lease.releaseVisual(restoreId)
             if(animated&&Guard.call("live-restore-direct"){backend.restoreLiveFocus(restoreId,base)}==true){
+                stackLayer=null;stackNativeLayer=null
+                lease.releaseVisual(restoreId,resyncLayers=true)
                 journal.edit().remove(journalKey).commit()
                 Guard.info("live mini restored task=$restoreId direct=true source=$source")
                 clear()
             }else{
+                if(keepVisual)lease.releaseVisual(restoreId,resyncLayers=false)
                 backend.restore(restoreId,base) callback@{ ok ->
                     if(g!=generation)return@callback
                     if(ok){
+                        stackLayer=null;stackNativeLayer=null
                         journal.edit().remove(journalKey).commit()
                         Guard.info("live mini restored task=$restoreId direct=false source=$source")
                         clear()

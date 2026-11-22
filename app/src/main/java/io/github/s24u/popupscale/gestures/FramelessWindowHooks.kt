@@ -21,10 +21,11 @@ import de.robv.android.xposed.XposedHelpers as X
 class FramelessWindowHooks(private val loader:ClassLoader,private val config:FeatureConfig) {
     private data class Owned(val surface:Any,val crop:Rect,val radius:Float,val caption:Int,
                              val taskId:Int,var zeroSince:Long=0L)
-    private val owned=java.util.WeakHashMap<Any,Owned>() // WM global lock / prepareSurfaces
+    private val stateLock=Any()
+    private val owned=java.util.WeakHashMap<Any,Owned>() // Guarded by stateLock.
     private data class RootCrop(val window:java.lang.ref.WeakReference<Any>,val surface:Any,
                                 val crop:Rect,val radius:Float,val taskId:Int,val caption:Int)
-    private val roots=java.util.WeakHashMap<Any,RootCrop>()
+    private val roots=java.util.WeakHashMap<Any,RootCrop>() // Guarded by stateLock.
     private val miniDeadlines=java.util.concurrent.ConcurrentHashMap<Int,Long>()
     private var radiusMethod:java.lang.reflect.Method?=null
     private var insetsMethod:java.lang.reflect.Method?=null
@@ -51,7 +52,7 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         val configuration=X.callMethod(task,"getConfiguration")?:return null
         // Samsung's native Configuration ABI marks on-device DeX too (display can be 0).
         if((Guard.field(configuration,"semDesktopModeEnabled") as? Int)==1)return null
-        if(!config.accepts(info.packageName)||X.callMethod(task,"getWindowingMode")!=5||
+        if(!config.acceptsInteraction(info.packageName)||X.callMethod(task,"getWindowingMode")!=5||
             X.callMethod(task,"getActivityType")!=1||X.callMethod(task,"getDisplayId")!=0||
             !io.github.s24u.popupscale.CloneUserPolicy.supported(X.getIntField(task,"mUserId")))return null
         return Target(window,attrs,activity,info,task)
@@ -66,8 +67,31 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         }
     }
 
-    private fun hasActiveCrop(taskId:Int)=
-        owned.values.any{it.taskId==taskId}||roots.values.any{it.taskId==taskId}
+    private fun snapshotOwned():List<Pair<Any,Owned>> = synchronized(stateLock){
+        val out=ArrayList<Pair<Any,Owned>>()
+        val it=owned.entries.iterator()
+        while(it.hasNext()){
+            val e=it.next()
+            val k=e.key ?: continue
+            out.add(k to e.value)
+        }
+        out
+    }
+
+    private fun snapshotRoots():List<RootCrop> = synchronized(stateLock){
+        val out=ArrayList<RootCrop>()
+        val it=roots.values.iterator()
+        while(it.hasNext())out.add(it.next())
+        out
+    }
+
+    private fun hasActiveCrop(taskId:Int):Boolean = synchronized(stateLock){
+        val ownedIt=owned.values.iterator()
+        while(ownedIt.hasNext())if(ownedIt.next().taskId==taskId)return true
+        val rootsIt=roots.values.iterator()
+        while(rootsIt.hasNext())if(rootsIt.next().taskId==taskId)return true
+        false
+    }
 
     private fun isMiniVisual(taskId:Int,now:Long=android.os.SystemClock.uptimeMillis()):Boolean {
         val deadline=miniDeadlines[taskId]?:return false
@@ -81,17 +105,19 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         if(taskId<0)return 0
         val mini=deadlineUptimeMs>0L
         if(mini)miniDeadlines[taskId]=deadlineUptimeMs else miniDeadlines.remove(taskId)
+        val rootSnapshot=snapshotRoots()
+        val ownedSnapshot=snapshotOwned()
         var maxCaption=0
         var tx:SurfaceControl.Transaction?=null
         try {
-            for(root in roots.values){
+            for(root in rootSnapshot){
                 if(root.taskId!=taskId||X.callMethod(root.surface,"isValid")!=true)continue
                 val t=tx?:SurfaceControl.Transaction().also{tx=it}
                 X.callMethod(t,"setCrop",root.surface,root.crop)
                 X.callMethod(t,"setCornerRadius",root.surface,if(mini)0f else root.radius)
                 if(root.caption>maxCaption)maxCaption=root.caption
             }
-            for(entry in owned.values){
+            for((_,entry) in ownedSnapshot){
                 if(entry.taskId!=taskId||X.callMethod(entry.surface,"isValid")!=true)continue
                 val t=tx?:SurfaceControl.Transaction().also{tx=it}
                 X.callMethod(t,"setCrop",entry.surface,entry.crop)
@@ -156,10 +182,11 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         if(rootPrepare!=null)XposedBridge.hookMethod(rootPrepare,object:XC_MethodHook(){
             override fun afterHookedMethod(p:MethodHookParam){
                 if(p.hasThrowable()||!Guard.open("frameless-root-prepare"))return
-                val root=roots[p.thisObject]?:return
+                val root=synchronized(stateLock){roots[p.thisObject]}?:return
                 val window=root.window.get()?:return
                 Guard.call("frameless-root-prepare"){
-                    if(!config.enabled||config.observe||!config.frameless||!owned.containsKey(window)){
+                    val hasOwned=synchronized(stateLock){owned.containsKey(window)}
+                    if(!config.enabled||config.observe||!config.frameless||!hasOwned){
                         restore(window);return@call
                     }
                     // WindowState.prepareSurfaces already refreshed ownership/geometry
@@ -291,7 +318,7 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
                 val released=resizeHolds.releaseSync(syncId,android.os.SystemClock.uptimeMillis())
                 if(released.isEmpty())return
                 val tx=p.args.getOrNull(0) ?: return
-                for((window,entry) in owned.entries.toList()){
+                for((window,entry) in snapshotOwned()){
                     if(entry.taskId in released)Guard.call("frameless-resize-release"){update(window,tx)}
                 }
             }
@@ -302,24 +329,34 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         if(!Guard.open("frameless-window-crop")||!Guard.open("frameless-crop-join"))return
         Guard.call("frameless-crop-join"){
             update(window,tx)
-            if(owned.containsKey(window)&&syncReports<24){
+            if(synchronized(stateLock){owned.containsKey(window)}&&syncReports<24){
                 syncReports++
                 Guard.info("frameless crop joined $stage window=${System.identityHashCode(window)}")
             }
         }
     }
     private fun restore(window:Any,transaction:Any?=null){
-        val old=owned.remove(window)
-        val rootEntries=roots.entries.toList().filter{it.value.window.get()===window}
+        val old:Owned?
+        val rootEntries=ArrayList<RootCrop>()
+        synchronized(stateLock){
+            old=owned.remove(window)
+            val it=roots.entries.iterator()
+            while(it.hasNext()){
+                val entry=it.next()
+                val root=entry.value
+                if(root.window.get()===window){
+                    rootEntries.add(root)
+                    it.remove()
+                }
+            }
+        }
         if(old==null&&rootEntries.isEmpty())return
         val tx=transaction?:windowTransaction(window)?:return
         if(old!=null&&X.callMethod(old.surface,"isValid")==true){
             X.callMethod(tx,"setCrop",old.surface,null)
             X.callMethod(tx,"setCornerRadius",old.surface,0f)
         }
-        rootEntries.forEach{(activity,root)->
-            roots.remove(activity);clearRoot(tx,root)
-        }
+        for(root in rootEntries)clearRoot(tx,root)
         old?.taskId?.let{id->if(!hasActiveCrop(id))resizeHolds.clearTask(id)}
     }
     private fun clearRoot(tx:Any,root:RootCrop){
@@ -331,7 +368,7 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
                            resizeHeld:Boolean=false,allowZeroCaption:Boolean=false,
                            now:Long=android.os.SystemClock.uptimeMillis()){
         val taskId=X.getIntField(task,"mTaskId")
-        val previous=roots[activity]
+        val previous=synchronized(stateLock){roots[activity]}
         if(resizeHeld){
             if(previous!=null&&X.callMethod(previous.surface,"isValid")==true){
                 X.callMethod(tx,"setCrop",previous.surface,previous.crop)
@@ -345,7 +382,10 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
             X.callMethod(activity,"getParent")===task,
             Guard.field(activity,"mFixedRotationTransformState")!=null,allowZeroCaption)
         if(plan==null){
-            roots[activity]?.takeIf{it.window.get()===window}?.let{roots.remove(activity);clearRoot(tx,it)}
+            val stale=synchronized(stateLock){
+                roots[activity]?.takeIf{it.window.get()===window}?.also{roots.remove(activity)}
+            }
+            if(stale!=null)clearRoot(tx,stale)
             return
         }
         val surface=Guard.field(activity,"mSurfaceControl")?:return
@@ -353,7 +393,9 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         val crop=Rect(0,plan.top,plan.right,plan.bottom)
         X.callMethod(tx,"setCrop",surface,crop)
         X.callMethod(tx,"setCornerRadius",surface,if(isMiniVisual(taskId,now))0f else radius)
-        roots[activity]=RootCrop(java.lang.ref.WeakReference(window),surface,crop,radius,taskId,caption)
+        synchronized(stateLock){
+            roots[activity]=RootCrop(java.lang.ref.WeakReference(window),surface,crop,radius,taskId,caption)
+        }
         if(reports<96&&(previous==null||previous.surface!==surface||previous.crop!=crop)){
             reports++;Guard.info("frameless server-owned root crop task=$taskId crop=${crop.flattenToString()}")
         }
@@ -370,7 +412,7 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         val bounds=X.callMethod(task,"getBounds") as Rect
         val surfaceInsets=Guard.field(attrs,"surfaceInsets") as? Rect?:run{restore(window,transaction);return}
         if(!surfaceInsets.isEmpty){restore(window,transaction);return}
-        val old=owned[window]
+        val old=synchronized(stateLock){owned[window]}
         val aligned=kotlin.math.abs(frame.left-bounds.left)<=2&&kotlin.math.abs(frame.top-bounds.top)<=2&&
             kotlin.math.abs(frame.width()-bounds.width())<=2
         // Shell's bounds update precedes the app's next layout. Do not reveal its old
@@ -379,23 +421,20 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         val retain=old!=null&&attrs.width==WindowManager.LayoutParams.MATCH_PARENT&&
             attrs.height==WindowManager.LayoutParams.MATCH_PARENT
         if(!aligned&&!retain){restore(window,transaction);return}
-        val suppressCaption=CaptionCropPolicy.suppressesClientCaption(target.info.packageName)
         val now=android.os.SystemClock.uptimeMillis()
-        val caption=if(suppressCaption) 0 else {
-            val method=insetsMethod?:return
-            val state=readRawInsets(method,window)
-            val calculate=insetsReader?:return
-            // Android 17 attached Insets sources need the container bounds as well as the
-            // window frame. Older ROMs retain the three-argument absolute-source overload.
-            val inset=calculate.calculate(state,frame,bounds)
-            if(aligned&&inset.top<=0&&old!=null){if(old.zeroSince==0L)old.zeroSince=now}
-            else if(inset.top>0)old?.zeroSince=0L
-            CaptionCropPolicy.caption(inset.top,old?.caption,aligned,retain,
-                if(old?.zeroSince==null||old.zeroSince==0L)0L else now-old.zeroSince)?:run{restore(window,transaction);return}
-        }
+        val method=insetsMethod?:return
+        val state=readRawInsets(method,window)
+        val calculate=insetsReader?:return
+        // Android 17 attached Insets sources need the container bounds as well as the
+        // window frame. Older ROMs retain the three-argument absolute-source overload.
+        val inset=calculate.calculate(state,frame,bounds)
+        if(aligned&&inset.top<=0&&old!=null){if(old.zeroSince==0L)old.zeroSince=now}
+        else if(inset.top>0)old?.zeroSince=0L
+        val caption=CaptionCropPolicy.caption(inset.top,old?.caption,aligned,retain,
+            if(old?.zeroSince==null||old.zeroSince==0L)0L else now-old.zeroSince)?:run{restore(window,transaction);return}
         val sx=X.getFloatField(window,"mGlobalScale")*X.getFloatField(window,"mHScale")
         val sy=X.getFloatField(window,"mGlobalScale")*X.getFloatField(window,"mVScale")
-        val plan=CaptionCropPolicy.crop(frame.width(),frame.height(),caption,sx,sy,suppressCaption)?:run{restore(window,transaction);return}
+        val plan=CaptionCropPolicy.crop(frame.width(),frame.height(),caption,sx,sy)?:run{restore(window,transaction);return}
         val wm=X.getObjectField(window,"mWmService")
         val context=X.getObjectField(wm,"mContext") as Context
         val radiusFn=radiusMethod?:return
@@ -408,9 +447,9 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         val taskId=X.getIntField(task,"mTaskId")
         val resizeHeld=resizeHolds.isHeld(taskId,now)
         val crop=Rect(0,plan.top,plan.right,plan.bottom)
-        val previous=owned[window]
+        val previous=synchronized(stateLock){owned[window]}
         if(previous!=null&&previous.surface!==surface)restore(window,transaction)
-        val retained=owned[window]
+        val retained=synchronized(stateLock){owned[window]}
         // While Shell holds the old Task leash scale for an in-flight resize sync, keep the
         // prior window/activity crop until onTransactionReady commits alongside setMatrix(1).
         if(resizeHeld&&(retained==null||retained.surface!==surface))return
@@ -423,8 +462,10 @@ class FramelessWindowHooks(private val loader:ClassLoader,private val config:Fea
         // ViewRootImpl transaction cannot clear on the shared WindowState surface.
         X.callMethod(tx,"setCrop",surface,appliedCrop)
         X.callMethod(tx,"setCornerRadius",surface,if(isMiniVisual(taskId,now))0f else appliedRadius)
-        owned[window]=Owned(surface,Rect(appliedCrop),appliedRadius,appliedCaption,taskId,old?.zeroSince?:0L)
-        if(aligned)updateRoot(window,activity,task,bounds,appliedCaption,radius.toFloat(),tx,resizeHeld,suppressCaption,now)
+        synchronized(stateLock){
+            owned[window]=Owned(surface,Rect(appliedCrop),appliedRadius,appliedCaption,taskId,old?.zeroSince?:0L)
+        }
+        if(aligned)updateRoot(window,activity,task,bounds,appliedCaption,radius.toFloat(),tx,resizeHeld,false,now)
         if(reports<96&&(retained==null||retained.crop!=appliedCrop||retained.radius!=appliedRadius)){
             reports++
             Guard.info("frameless app-window crop task=$taskId user=${X.getIntField(task,"mUserId")} caption=$appliedCaption aligned=$aligned scale=$sx/$sy crop=${appliedCrop.flattenToString()} radius=$appliedRadius")

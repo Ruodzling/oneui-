@@ -37,6 +37,16 @@ public final class AppScopeChecks {
         check(AppScopePolicy.hasApplicationUid(10386), "Ordinary user app excluded");
         check(AppScopePolicy.hasApplicationUid(1010386), "Profile app excluded");
         check(!AppScopePolicy.includes(added, false, true, old, none), "All mode leaked after switch back");
+        check(AppScopePolicy.includesInteraction(added, false), "Ordinary app blocked from interactions");
+        check(AppScopePolicy.includesInteraction("com.tencent.mm", true), "Ordinary app interaction missing");
+        check(!AppScopePolicy.includesInteraction(AppScopePolicy.MODULE_PACKAGE, false), "Self demo gate bypassed");
+        check(AppScopePolicy.includesInteraction(AppScopePolicy.MODULE_PACKAGE, true), "Self interaction blocked");
+        for (String core : new String[]{"android", "com.android.systemui", "com.android.settings",
+                "com.sec.android.app.launcher", "com.samsung.android.honeyboard",
+                "com.google.android.inputmethod.latin", AppScopePolicy.SIDE_GESTURE_PACKAGE,
+                AppScopePolicy.PERMISSION_PACKAGE, null}) {
+            check(!AppScopePolicy.includesInteraction(core, true), "Core/blocked admitted to interactions: " + core);
+        }
         System.out.println("PASS: application scope expansion, opt-out, migration and core UID checks.");
     }
 }

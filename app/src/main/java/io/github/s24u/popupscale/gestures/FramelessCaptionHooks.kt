@@ -35,7 +35,7 @@ class FramelessCaptionHooks(private val loader:ClassLoader,private val config:Fe
         val owner=outlineOwners[view]?:return false
         val current=state.get(owner.id)
         // A verified retiring outline stays hidden until removal; disabling restores it.
-        val active=state.active()&&config.accepts(owner.packageName)&&
+        val active=state.active()&&config.acceptsInteraction(owner.packageName)&&
             (current==null||current.token==owner.token&&current.user==owner.user)
         if(!active)outlineVisibility.apply(view,false)
         return active

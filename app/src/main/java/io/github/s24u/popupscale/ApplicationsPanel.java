@@ -251,7 +251,7 @@ final class ApplicationsPanel extends LinearLayout {
     } catch (RuntimeException bad) {
       valid = false;
     }
-    hint.setText(allEnabled ? "默认缩放全部应用，关闭某一项即可排除。" : "仅缩放开启的应用，新安装应用默认关闭。");
+    hint.setText(allEnabled ? "默认缩放全部应用，关闭某一项即可排除（不影响无边框、控制条等小窗交互）。" : "仅缩放开启的应用，新安装应用默认关闭（不影响无边框、控制条等小窗交互）。");
     String query =
         search.getText() == null ? "" : search.getText().toString().trim().toLowerCase(Locale.ROOT);
     visible.clear();
@@ -267,7 +267,7 @@ final class ApplicationsPanel extends LinearLayout {
     if (summary != null)
       summary.setText(
           !valid
-              ? "应用配置格式有误，请到更多设置中检查"
+              ? "应用配置读取异常，请重新打开应用后重试"
               : loading
                   ? "正在加载应用…"
                   : visible.isEmpty()

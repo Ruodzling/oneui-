@@ -16,7 +16,12 @@ class FeatureConfig(private val owner:String="unspecified") {
     companion object {
         private val instances=java.util.WeakHashMap<FeatureConfig,Boolean>()
         fun snapshots():org.json.JSONArray {
-            val copy=synchronized(instances){instances.keys.toList()}
+            val copy=synchronized(instances){
+                val out=ArrayList<FeatureConfig>()
+                val it=instances.keys.iterator()
+                while(it.hasNext())out.add(it.next())
+                out
+            }
             return org.json.JSONArray().apply{copy.forEach{put(it.snapshot())}}
         }
     }
@@ -212,15 +217,17 @@ class FeatureConfig(private val owner:String="unspecified") {
 
     @Synchronized fun accepts(name: String?) = name != null &&
         AppScopePolicy.includes(name, all, demo, selected, excluded)
+    @Synchronized fun acceptsInteraction(name: String?) = name != null &&
+        AppScopePolicy.includesInteraction(name, demo)
     @Synchronized fun allowsEdgeTop(name:String?,user:Int,display:Int,type:Int,mode:Int,width:Int,height:Int)=
-        FrameworkLayoutPolicy.allowEdgeTop(enabled,observe,accepts(name),user,display,type,mode,width,height)
+        FrameworkLayoutPolicy.allowEdgeTop(enabled,observe,acceptsInteraction(name),user,display,type,mode,width,height)
     @Synchronized fun externalScale(name:String?,user:Int,display:Int,type:Int,mode:Int,
                                    width:Int,height:Int,nativeDpi:Int)=
         ExternalScalePolicy.calculate(name,unifiedScale,contentEnabled,contentDiagnostic,accepts(name),
             user,display,type,mode,width,height,nativeDpi,referenceDp)
     @Synchronized fun externalCandidate(name:String?)=ExternalScalePolicy.usesExternal(name,unifiedScale)
     @Synchronized fun unifiedMode()=unifiedScale
-    @Synchronized fun homeMiniEnabled(name:String?)=enabled&&!observe&&live&&hang&&accepts(name)
+    @Synchronized fun homeMiniEnabled(name:String?)=enabled&&!observe&&live&&hang&&acceptsInteraction(name)
     @Synchronized fun homeMiniKeepPlayback(name:String?)=homeMiniEnabled(name)&&miniKeepPlayback&&(miniKeepPlaybackAll||(name!=null&&miniKeepPlaybackPackages.contains(name)))
     @Synchronized fun playerDensityConfig(name:String,activity:String,external:Boolean,user:Int,
         display:Int,type:Int,mode:Int,original:Int)=PlayerCompatPolicy.densityConfigChanges(
@@ -236,6 +243,6 @@ class FeatureConfig(private val owner:String="unspecified") {
         user,display,type,mode,original)
     @Synchronized fun portraitEntry(name:String?,user:Int,display:Int,type:Int,mode:Int,width:Int,height:Int,
                                     newEntry:Boolean,wide:Boolean,owned:Boolean)=
-        FrameworkLayoutPolicy.portraitEntry(enabled,observe,handles,accepts(name),user,display,type,mode,
+        FrameworkLayoutPolicy.portraitEntry(enabled,observe,handles,acceptsInteraction(name),user,display,type,mode,
             width,height,newEntry,wide,owned)
 }

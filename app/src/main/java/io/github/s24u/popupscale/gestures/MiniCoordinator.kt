@@ -27,14 +27,21 @@ class MiniCoordinator(private val context:Context,private val backend:TaskBacken
         lateinit var member:LiveMiniController
         member=LiveMiniController(context,backend,frame,{finished->
             if(lives.remove(finished,member))main.post{Guard.call("mini-stack-release"){stack.remove(finished);released(finished)}}
-        },key,{changedId->main.post{Guard.call("mini-stack-ready"){stack.invalidate(changedId);stack.refresh(true)}}},{task,event->stack.touch(task,event)})
+        },key,{changedId->main.post{Guard.call("mini-stack-ready"){stack.invalidate(changedId);stack.refresh(true)}}},{task,event->stack.touch(task,event)},{expandedId->homeOtherMinis(expandedId)})
             .also{it.setShadeObscured(shadeObscured);lives[id]=it}
         return member
+    }
+    private fun homeOtherMinis(expandedId:Int){
+        Guard.call("mini-stack-home"){stack.homeAfterExpand(expandedId)}
+        lives.entries.toList().forEach{(otherId,ctrl)->
+            if(otherId!=expandedId&&ctrl.canHomeToDefault())Guard.call("live-home-default"){ctrl.returnToDefaultCorner()}
+        }
     }
     private fun controller(id:Int):LiveMiniController=synchronized(lives){
         lives[id] ?: create(id)
     }
     fun isMini(id:Int)=snapshot.isMini(id)||lives[id]?.isMini(id)==true
+    fun diagnosticRect(id:Int):Rect?=lives[id]?.diagnosticRect(id)
     fun inputTouchable(id:Int):Boolean?=lives[id]?.inputTouchable()
     fun setShadeObscured(obscured:Boolean){
         shadeObscured=obscured

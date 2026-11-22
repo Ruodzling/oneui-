@@ -71,6 +71,30 @@ object MiniStackPolicy {
                 if(depth<3)1f else 0f,depth==0)
         }
     }
+    /** Keep every stacked card's interceptor overlay touchable so exposed back-card pixels never
+     * leak input into the underlying Task surface. */
+    fun overlayTouchable(front:Boolean,stackControlled:Boolean)=front||stackControlled
+    fun hitFront(rawX:Float,rawY:Float,front:LivePlacement.Bounds?,pad:Int=0):Boolean {
+        if(front==null||!rawX.isFinite()||!rawY.isFinite())return false
+        val p=pad.coerceAtLeast(0)
+        return rawX>=front.x-p&&rawX<front.x+front.width+p&&rawY>=front.y-p&&rawY<front.y+front.height+p
+    }
+    /** Tapping an exposed back card only blocks pass-through to the app without expanding. */
+    fun expandOnTap(startedOnFront:Boolean)=startedOnFront
+    /** When one mini expands into a standard popup, home remaining floating minis to top-right. */
+    fun homeAnchor(defaultBounds:LivePlacement.Bounds?,remainingCount:Int):LivePlacement.Bounds? =
+        if(remainingCount>0)defaultBounds else null
+    /** Keep the expanding card above other popups during its animated restore; only reset to the
+     * stale pre-stack native layer for immediate non-animated recovery/teardown. */
+    fun restoreLayerBeforeExpand(animated:Boolean)=!animated
+    /** Resync SurfaceFlinger Z-order from WindowManager's true hierarchy for every visible freeform
+     * task not pinned inside an active multi-card mini stack. */
+    fun resyncTaskLayer(windowingMode:Int,activeMultiStack:Boolean,leased:Boolean)=
+        windowingMode==5&&!(activeMultiStack&&leased)
+    /** Temporary SurfaceFlinger layer above existing popups and any remaining mini stack while
+     * a mini animates into a standard popup; cleared by resyncFreeformLayers once focused. */
+    fun expandingLayer(maxFreeformLayer:Int,remainingLeases:Int):Int? =
+        if(maxFreeformLayer in 0..1000000)maxFreeformLayer+remainingLeases.coerceAtLeast(0)+1 else null
     /** Horizontal swipe changes cards. A hold or vertical movement drags the whole stack. */
     fun swipe(dx:Float,dy:Float,velocity:Float,density:Float,windowWidth:Int=0):Int {
         if(!dx.isFinite()||!dy.isFinite()||!velocity.isFinite()||!density.isFinite()||density<=0)return 0

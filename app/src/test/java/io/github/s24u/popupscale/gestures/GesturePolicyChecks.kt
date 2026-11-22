@@ -552,6 +552,26 @@ object GesturePolicyChecks{
         check(MiniStackPolicy.swipe(8f,5f,3000f,3.75f)==0)
         check(MiniStackPolicy.swipe(160f,220f,3000f,3.75f)==0)
         check(MiniStackPolicy.swipe(160f,5f,3000f,Float.NaN)==0)
+        // Stacked back cards must stay shielded by touchable overlays; taps on exposed back-card pixels do not expand.
+        check(MiniStackPolicy.overlayTouchable(true,true)&&MiniStackPolicy.overlayTouchable(false,true))
+        check(MiniStackPolicy.overlayTouchable(true,false)&&!MiniStackPolicy.overlayTouchable(false,false))
+        val frontCard=LivePlacement.Bounds(1035,180,360,271)
+        check(MiniStackPolicy.hitFront(1200f,300f,frontCard,15))
+        check(MiniStackPolicy.hitFront(1025f,180f,frontCard,15)) // within pad
+        check(!MiniStackPolicy.hitFront(1200f,550f,frontCard,15)) // exposed tall back card below front card
+        check(!MiniStackPolicy.hitFront(Float.NaN,300f,frontCard,15))
+        check(MiniStackPolicy.expandOnTap(true)&&!MiniStackPolicy.expandOnTap(false))
+        check(MiniStackPolicy.homeAnchor(frontCard,2)==frontCard)
+        check(MiniStackPolicy.homeAnchor(frontCard,1)==frontCard)
+        check(MiniStackPolicy.homeAnchor(frontCard,0)==null)
+        check(!MiniStackPolicy.restoreLayerBeforeExpand(true)&&MiniStackPolicy.restoreLayerBeforeExpand(false))
+        check(MiniStackPolicy.resyncTaskLayer(5,false,true))
+        check(MiniStackPolicy.resyncTaskLayer(5,true,false))
+        check(!MiniStackPolicy.resyncTaskLayer(5,true,true))
+        check(!MiniStackPolicy.resyncTaskLayer(1,false,false))
+        check(MiniStackPolicy.expandingLayer(7,0)==8)
+        check(MiniStackPolicy.expandingLayer(7,2)==10)
+        check(MiniStackPolicy.expandingLayer(-1,0)==null)
         fun homeMini(enabled:Boolean=true,observe:Boolean=false,live:Boolean=true,hang:Boolean=true,
                      selected:Boolean=true,user:Int=0,currentUser:Int=0,display:Int=0,type:Int=1,mode:Int=5,
                      visible:Boolean=true,unlocked:Boolean=true)=MiniLeasePolicy.homeEligible(enabled,observe,live,hang,
@@ -722,6 +742,40 @@ object GesturePolicyChecks{
         check(!PlayerCompatPolicy.playerCaller("sw1.h","then")) // clipboard foreground guard
         check(!PlayerCompatPolicy.playerCaller("com.bilibili.search2.main.BiliMainSearchActivity","ga"))
         check(!PlayerCompatPolicy.playerCaller("com.bilibili.playerbizcommon.features.background.BackgroundPlayService","access\$isInMultiWindowMode"))
+        // Version-independent Bilibili 9.20+ player / obfuscated helper stacks:
+        check(PlayerCompatPolicy.playerCaller("com.bilibili.app.gemini.player.widget.story.GeminiPlayerFullscreenWidget","m"))
+        check(PlayerCompatPolicy.shouldBypassFrames(listOf(
+            "java.lang.Thread" to "getStackTrace",
+            "io.github.s24u.popupscale.PopupScaleModule\$1" to "afterHookedMethod",
+            "android.app.Activity" to "isInMultiWindowMode",
+            "ab1.c" to "a",
+            "xy9.k" to "onClick",
+            "android.view.View" to "performClick")))
+        check(PlayerCompatPolicy.shouldBypassFrames(listOf(
+            "android.app.Activity" to "isInMultiWindowMode",
+            "ab1.c" to "a",
+            "com.bilibili.app.gemini.player.widget.story.GeminiPlayerFullscreenWidget" to "q")))
+        check(PlayerCompatPolicy.shouldBypassFrames(listOf(
+            "android.app.Activity" to "isInMultiWindowMode",
+            "ab1.c" to "b",
+            "android.app.Activity" to "onConfigurationChanged")))
+        check(!PlayerCompatPolicy.shouldBypassFrames(listOf(
+            "android.app.Activity" to "isInMultiWindowMode",
+            "sw1.h" to "then",
+            "android.os.Handler" to "dispatchMessage")))
+        check(!PlayerCompatPolicy.shouldBypassFrames(listOf(
+            "android.app.Activity" to "isInMultiWindowMode",
+            "ab1.c" to "a",
+            "com.bilibili.playerbizcommon.features.background.BackgroundPlayService" to "onStart",
+            "android.view.View" to "performClick")))
+        check(!PlayerCompatPolicy.shouldBypassFrames(listOf(
+            "android.app.Activity" to "isInMultiWindowMode",
+            "io.github.s24u.popupscale.CanvasController" to "windowMode",
+            "android.view.View" to "performClick")))
+        check(!PlayerCompatPolicy.shouldBypassFrames(listOf(
+            "android.app.Activity" to "isInMultiWindowMode",
+            "androidx.core.app.ActivityCompat" to "checkMultiWindow",
+            "android.view.View" to "performClick")))
         for(o in listOf(0,6,8,11))check(PlayerCompatPolicy.explicitWide(bili,detail,5,o)==true)
         for(o in listOf(-1,1,7,9,12))check(PlayerCompatPolicy.explicitWide(bili,detail,5,o)==false)
         check(PlayerCompatPolicy.explicitWide(bili,detail,5,4)==null) // sensor: retain source heuristic
@@ -1281,10 +1335,14 @@ object GesturePolicyChecks{
         check(!io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("com.samsung.knox.securefolder", true, false, true, true, true, ohoSelected, emptySet()))
         check(!io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("com.samsung.knox.securefolder", true, true, false, true, true, ohoSelected, emptySet()))
         check("disabled" == io.github.s24u.popupscale.SideGesturePolicy.launchDecisionReason("com.samsung.knox.securefolder", true, true, false, true, true, ohoSelected, emptySet(), true))
-        check(!io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("com.samsung.knox.securefolder", true, true, true, true, true, ohoSelected, ohoExcluded))
-        check("excluded" == io.github.s24u.popupscale.SideGesturePolicy.launchDecisionReason("com.samsung.knox.securefolder", true, true, true, true, true, ohoSelected, ohoExcluded, true))
+        check(io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("com.samsung.knox.securefolder", true, true, true, true, true, ohoSelected, ohoExcluded))
+        check("fast-action" == io.github.s24u.popupscale.SideGesturePolicy.launchDecisionReason("com.samsung.knox.securefolder", true, true, true, true, true, ohoSelected, ohoExcluded, true))
         check(io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("com.sec.android.app.popupcalculator", true, true, true, false, true, ohoSelected, emptySet()))
-        check(!io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("com.samsung.knox.securefolder", true, true, true, false, true, ohoSelected, emptySet()))
+        check(io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("com.samsung.knox.securefolder", true, true, true, false, true, ohoSelected, emptySet()))
+        check(!io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget("android", true, true, true, true, true, ohoSelected, emptySet()))
+        check("excluded" == io.github.s24u.popupscale.SideGesturePolicy.launchDecisionReason("android", true, true, true, true, true, ohoSelected, emptySet(), true))
+        check(io.github.s24u.popupscale.AppScopePolicy.includesInteraction("com.xingin.xhs", true))
+        check(!io.github.s24u.popupscale.AppScopePolicy.includesInteraction("com.android.systemui", true))
         check(!io.github.s24u.popupscale.SideGesturePolicy.shouldRedirectTarget(io.github.s24u.popupscale.AppScopePolicy.MODULE_PACKAGE, true, true, true, true, false, ohoSelected, emptySet()))
         check("fast-action" == io.github.s24u.popupscale.SideGesturePolicy.launchDecisionReason("com.sec.android.app.popupcalculator", true, true, true, true, true, ohoSelected, emptySet(), true))
         println("PASS: Good Lock OHO+ FastAction popup redirection policy, stack filtering and preferences defaults.")

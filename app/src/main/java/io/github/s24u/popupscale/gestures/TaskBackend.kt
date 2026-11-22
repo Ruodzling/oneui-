@@ -116,7 +116,7 @@ class TaskBackend(val context: Context, private val organizer: Any, private val 
         config.reload()
         io.github.s24u.popupscale.CloneProfileRegistry.refresh(context)
         if (type != 1 || mode !in setOf(1, 5) || X.getIntField(info, "displayId") != 0 ||
-            !io.github.s24u.popupscale.CloneUserPolicy.visibleToOwner(X.getIntField(info,"userId"),Process.myUid()/100000) || !config.accepts(component.packageName))
+            !io.github.s24u.popupscale.CloneUserPolicy.visibleToOwner(X.getIntField(info,"userId"),Process.myUid()/100000) || !config.acceptsInteraction(component.packageName))
             return@call null
         TaskRecord(info, X.getIntField(info, "taskId"), X.getObjectField(info, "token"),
             Rect(X.callMethod(w, "getBounds") as Rect), mode,

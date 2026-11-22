@@ -121,7 +121,7 @@ class LauncherGestureHook(private val loader:ClassLoader,private val config:Feat
                                 val w=X.getObjectField(c,"windowConfiguration")
                                 val taskId=X.getIntField(info,"taskId")
                                 val rejection=when{
-                                    !config.accepts(component?.packageName)->"app-not-selected"
+                                    !config.acceptsInteraction(component?.packageName)->"app-not-selected"
                                     X.callMethod(w,"getActivityType")!=1->"non-standard-task"
                                     X.callMethod(w,"getWindowingMode")!=1->"task-not-fullscreen"
                                     !io.github.s24u.popupscale.CloneUserPolicy.visibleToOwner(X.getIntField(info,"userId"),android.os.Process.myUid()/100000)->"unsupported-user"

@@ -11,7 +11,8 @@ import android.view.VelocityTracker
 import android.view.ViewConfiguration
 import android.view.animation.DecelerateInterpolator
 
-/** The cards are real task surfaces. Only the front card accepts input. */
+/** The cards are real task surfaces. Every stacked card intercepts input so back cards cannot
+ * leak touches to their underlying apps; taps only expand when started on the front card. */
 class MiniStackController(private val context:Context,private val backend:TaskBackend,
                           private val members:()->Map<Int,LiveMiniController>){
     private val order=MiniStackPolicy.Order()
@@ -27,6 +28,8 @@ class MiniStackController(private val context:Context,private val backend:TaskBa
     private var down=false
     private var gesture:MiniStackPolicy.Gesture?=null
     private var touchTask=-1
+    private var touchTarget=-1
+    private var touchStartedOnFront=false
     private var touchFrames=emptyList<MiniStackPolicy.Frame>()
     private var downX=0f;private var downY=0f;private var downAt=0L
     private var start=Rect()
@@ -50,6 +53,21 @@ class MiniStackController(private val context:Context,private val backend:TaskBa
     fun count():Int {reconcileMembers();return order.ids().size}
     fun add(ids:List<Int>){order.add(ids);raised=-1}
     fun remove(id:Int){if(down)cancel();order.remove(id);applied.invalidate(id);raised=-1;refresh()}
+    fun homeAfterExpand(expandedId:Int){
+        if(down)cancel()
+        order.remove(expandedId);applied.invalidate(expandedId);raised=-1
+        val all=reconcileMembers()
+        val remaining=order.ids().filter{all[it]?.stackReady()==true}
+        val nextDefault=remaining.firstOrNull()?.let{all[it]?.defaultMiniRect()}?.let{
+            LivePlacement.Bounds(it.left,it.top,it.width(),it.height())
+        }
+        val home=MiniStackPolicy.homeAnchor(nextDefault,remaining.size)
+        if(home!=null){
+            anchor=rectangle(home)
+            Guard.info("mini stack homing after expand expanded=$expandedId front=${remaining.first()} count=${remaining.size} target=${home.x},${home.y}")
+        }
+        refresh(animated=true,returnReleasedToDefault=true)
+    }
     fun invalidate(id:Int){applied.invalidate(id)}
     fun invalidateAll(){applied.clear()}
     fun entryTarget(fallback:Rect):Rect {
@@ -67,7 +85,7 @@ class MiniStackController(private val context:Context,private val backend:TaskBa
     fun cancel(){
         stopPreview(false)
         if(gesture?.motion==MiniStackPolicy.Motion.DRAG)anchor=Rect(start)
-        down=false;gesture=null;touchTask=-1;touchFrames=emptyList();unlockTouch()
+        down=false;gesture=null;touchTask=-1;touchTarget=-1;touchStartedOnFront=false;touchFrames=emptyList();unlockTouch()
         animator?.cancel();animator=null;velocity?.recycle();velocity=null
     }
     private fun frames():List<MiniStackPolicy.Frame>{
@@ -98,14 +116,14 @@ class MiniStackController(private val context:Context,private val backend:TaskBa
         raised=id
         Guard.info("mini stack surface order="+frames.joinToString(","){"${it.task}:${it.layer}"})
     }
-    fun refresh(animated:Boolean=false){
+    fun refresh(animated:Boolean=false,returnReleasedToDefault:Boolean=false){
         val allMembers=reconcileMembers()
         if(down||animator!=null)return
         if(order.ids().any{allMembers[it]?.let{member->member.busy()&&!member.stackReady()}==true})return
         val frames=frames()
         if(frames.isEmpty()){
             unlockTouch();applied.clear()
-            members().values.forEach{it.releaseStack()}
+            members().values.forEach{it.releaseStack(returnReleasedToDefault)}
             anchor=null;raised=-1;return
         }
         raise(frames)
@@ -152,20 +170,25 @@ class MiniStackController(private val context:Context,private val backend:TaskBa
         val all=reconcileMembers()
         if(all[id]?.stackMember()!=true)return false
         if(!down&&order.ids().size<2)return false
+        val frontId=front()
         // Never fall through to an individual card's free-drag handler while in a stack.
-        if(!down&&(id!=front()||order.ids().any{all[it]?.stackReady()!=true})){
-            if(event.actionMasked==MotionEvent.ACTION_DOWN)Guard.info("mini stack input deferred task=$id front=${front()}")
+        if(!down&&(frontId<0||order.ids().any{all[it]?.stackReady()!=true})){
+            if(event.actionMasked==MotionEvent.ACTION_DOWN)Guard.info("mini stack input deferred task=$id front=$frontId")
             refresh();return true
         }
         if(down&&id!=touchTask)return true
         when(event.actionMasked){
             MotionEvent.ACTION_DOWN->{
                 animator?.cancel();animator=null
-                down=true;touchTask=id
-                downX=event.rawX;downY=event.rawY;downAt=event.eventTime
-                start=Rect(anchor ?: all[id]?.miniRect() ?: return true)
-                gesture=MiniStackPolicy.Gesture(downX,downY,downAt,slop,ViewConfiguration.getLongPressTimeout().coerceAtLeast(350))
+                val frontRect=all[frontId]?.miniRect() ?: return true
                 val metrics=GestureDisplay.metrics(context);touchWidth=metrics.widthPixels;touchHeight=metrics.heightPixels
+                val pad=(4*metrics.density).toInt()
+                val onFront=MiniStackPolicy.hitFront(event.rawX,event.rawY,
+                    LivePlacement.Bounds(frontRect.left,frontRect.top,frontRect.width(),frontRect.height()),pad)
+                down=true;touchTask=id;touchTarget=frontId;touchStartedOnFront=onFront
+                downX=event.rawX;downY=event.rawY;downAt=event.eventTime
+                start=Rect(anchor ?: frontRect)
+                gesture=MiniStackPolicy.Gesture(downX,downY,downAt,slop,ViewConfiguration.getLongPressTimeout().coerceAtLeast(350))
                 touchFrames=frames().map{f->
                     val r=all[f.task]?.miniRect()
                     if(r==null||r.isEmpty)f else f.copy(bounds=LivePlacement.Bounds(r.left,r.top,r.width(),r.height()))
@@ -185,19 +208,23 @@ class MiniStackController(private val context:Context,private val backend:TaskBa
                 if(!down)return true
                 velocity?.addMovement(event);velocity?.computeCurrentVelocity(1000)
                 val m=GestureDisplay.metrics(context)
+                val targetId=touchTarget.takeIf{it>=0} ?: front()
+                val startedOnFront=touchStartedOnFront
                 val motion=gesture?.move(event.rawX,event.rawY,event.eventTime) ?: MiniStackPolicy.Motion.TAP
                 val direction=if(motion==MiniStackPolicy.Motion.SWIPE)MiniStackPolicy.swipe(event.rawX-downX,event.rawY-downY,
-                    velocity?.xVelocity ?: 0f,m.density,all[id]?.miniSize()?.width ?: 0) else 0
+                    velocity?.xVelocity ?: 0f,m.density,all[targetId]?.miniSize()?.width ?: 0) else 0
                 val tap=motion==MiniStackPolicy.Motion.TAP
                 stopPreview(true)
-                Guard.info("mini stack release task=$id mode=$motion dxDp=${((event.rawX-downX)/m.density).toInt()} " +
+                Guard.info("mini stack release task=$targetId source=$id onFront=$startedOnFront mode=$motion dxDp=${((event.rawX-downX)/m.density).toInt()} " +
                     "dyDp=${((event.rawY-downY)/m.density).toInt()} elapsed=${event.eventTime-downAt} direction=$direction")
-                down=false;gesture=null;touchTask=-1;touchFrames=emptyList()
+                down=false;gesture=null;touchTask=-1;touchTarget=-1;touchStartedOnFront=false;touchFrames=emptyList()
                 velocity?.recycle();velocity=null
                 if(tap){
                     unlockTouch()
-                    order.remove(id);raised=-1
-                    all[id]?.expandStack();refresh(true)
+                    if(MiniStackPolicy.expandOnTap(startedOnFront)&&targetId>=0){
+                        order.remove(targetId);raised=-1
+                        all[targetId]?.expandStack()
+                    }
                 }else{
                     if(direction!=0){order.switch(direction);raised=-1;Guard.info("mini stack switched front=${front()} count=${count()}")}
                     if(motion==MiniStackPolicy.Motion.DRAG){

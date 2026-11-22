@@ -47,7 +47,7 @@ class TaskOpacityController(private val context:Context,private val tasks:TaskBa
     private fun token(task:TaskRecord)=X.callMethod(task.token,"asBinder")?:task.token
     private fun admitted(task:TaskRecord):Boolean {
         config.reload()
-        return TaskOpacityPolicy.eligible(config.enabled,config.observe,config.accepts(task.packageName),
+        return TaskOpacityPolicy.eligible(config.enabled,config.observe,config.acceptsInteraction(task.packageName),
             task.userId,0,1,task.mode,true,false)
     }
     private fun eligible(task:TaskRecord)=admitted(task)&&task.visible&&!tasks.locked()
@@ -176,17 +176,21 @@ class TaskOpacityController(private val context:Context,private val tasks:TaskBa
             contentDescription="小窗透明度面板"
         }
         val slider=SeekBar(context).apply{
-            max=TaskOpacityPolicy.MAX_TRANSPARENCY;progress=value(id)
+            min=TaskOpacityPolicy.MIN_OPACITY;max=TaskOpacityPolicy.MAX_OPACITY
+            val opacity=TaskOpacityPolicy.opacityPercent(value(id))
+            progress=opacity
             layoutDirection=View.LAYOUT_DIRECTION_LTR
-            contentDescription="调整小窗透明度，最左侧恢复不透明，点空白处收起"
-            if(android.os.Build.VERSION.SDK_INT>=30)stateDescription="透明度 ${value(id)}%"
+            contentDescription="调整小窗不透明度，最右侧恢复完全不透明，点空白处收起"
+            if(android.os.Build.VERSION.SDK_INT>=30)stateDescription="不透明度 $opacity%"
         }
         slider.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener{
             override fun onStartTrackingTouch(s:SeekBar){}
             override fun onStopTrackingTouch(s:SeekBar){}
             override fun onProgressChanged(s:SeekBar,progress:Int,fromUser:Boolean){
                 if(fromUser)Guard.call("opacity-slider"){
-                    if(set(id,progress)&&android.os.Build.VERSION.SDK_INT>=30)s.stateDescription="透明度 $progress%"
+                    val opacity=progress.coerceIn(TaskOpacityPolicy.MIN_OPACITY,TaskOpacityPolicy.MAX_OPACITY)
+                    if(set(id,TaskOpacityPolicy.transparencyPercent(opacity))&&android.os.Build.VERSION.SDK_INT>=30)
+                        s.stateDescription="不透明度 $opacity%"
                 }
             }
         })

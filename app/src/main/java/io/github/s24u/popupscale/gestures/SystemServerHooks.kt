@@ -127,7 +127,7 @@ class SystemServerHooks(private val loader:ClassLoader,private val caps:RomCapab
                 val activity=X.callMethod(task,"topRunningActivityLocked")
                 val info=activity?.let{X.getObjectField(it,"info") as android.content.pm.ActivityInfo}
                 layoutConfig.enabled&&!layoutConfig.observe&&layoutConfig.handles&&info!=null&&
-                    layoutConfig.accepts(info.packageName)&&
+                    layoutConfig.acceptsInteraction(info.packageName)&&
                     io.github.s24u.popupscale.CloneUserPolicy.supported(X.getIntField(task,"mUserId"))&&
                     X.callMethod(task,"getDisplayId")==0&&X.callMethod(task,"getActivityType")==1&&
                     X.callMethod(task,"getWindowingMode")==1&&X.getBooleanField(task,"mVisibleRequested")
@@ -394,7 +394,7 @@ class SystemServerHooks(private val loader:ClassLoader,private val caps:RomCapab
         val info=X.getObjectField(activity,"info") as android.content.pm.ActivityInfo
         val unlocked=X.callMethod(X.getObjectField(atm,"mKeyguardController"),"isKeyguardLocked",0)!=true
         return MiniLeasePolicy.homeEligible(layoutConfig.enabled,layoutConfig.observe,layoutConfig.live,
-            layoutConfig.hang,layoutConfig.accepts(info.packageName),X.getIntField(task,"mUserId"),
+            layoutConfig.hang,layoutConfig.acceptsInteraction(info.packageName),X.getIntField(task,"mUserId"),
             X.getIntField(root,"mCurrentUser"),X.callMethod(task,"getDisplayId") as Int,
             X.callMethod(task,"getActivityType") as Int,X.callMethod(task,"getWindowingMode") as Int,
             X.getBooleanField(task,"mVisibleRequested"),unlocked)
@@ -535,7 +535,7 @@ class SystemServerHooks(private val loader:ClassLoader,private val caps:RomCapab
         val screen=X.getObjectField(display,"mDisplayInfo")
         val width=X.getIntField(screen,"logicalWidth");val height=X.getIntField(screen,"logicalHeight")
         if(!newEntry||mode!=5||width<=0||height<=width||!layoutConfig.enabled||layoutConfig.observe||
-            !layoutConfig.handles||!layoutConfig.accepts(info.packageName))return null
+            !layoutConfig.handles||!layoutConfig.acceptsInteraction(info.packageName))return null
         val id=task?.let{X.getIntField(it,"mTaskId")} ?: -1
         val current=leases[id]
         val owned=current!=null&&current.task==id&&current.expires>SystemClock.uptimeMillis()
@@ -639,8 +639,14 @@ class SystemServerHooks(private val loader:ClassLoader,private val caps:RomCapab
                     }
                     val endVisual=intent.getIntExtra("endVisualTask",-1)
                     val keepVisual=intent.getIntExtra("keepVisualTask",-1)
-                    if(endVisual>=0)applyMiniVisual(endVisual,0L)
-                    else if(keepVisual>=0)applyMiniVisual(keepVisual,now+400L)
+                    if(endVisual>=0){
+                        applyMiniVisual(endVisual,0L)
+                        if(intent.getBooleanExtra("resyncLayers",false))resyncFreeformLayers(endVisual)
+                    }
+                    else if(keepVisual>=0){
+                        applyMiniVisual(keepVisual,now+400L)
+                        boostExpandingTaskLayer(keepVisual)
+                    }
                     else removed.forEach{applyMiniVisual(it,0L)}
                     return@call
                 }
@@ -707,7 +713,90 @@ class SystemServerHooks(private val loader:ClassLoader,private val caps:RomCapab
             X.getIntField(task,"mLastLayer")
         }
     } ?: -1
+    private fun boostExpandingTaskLayer(taskId:Int)=Guard.call("mini-boost-expanding"){
+        val atm=atmService ?: return@call
+        synchronized(X.getObjectField(atm,"mGlobalLock")){
+            val root=X.getObjectField(atm,"mRootWindowContainer") ?: return@synchronized
+            val task=X.callMethod(root,"anyTaskForId",taskId,0,null,false) ?: return@synchronized
+            val parent=X.callMethod(task,"getParent") ?: return@synchronized
+            val children=Guard.field(parent,"mChildren") as? List<*> ?: return@synchronized
+            var maxLayer=-1
+            for(child in children){
+                if(child==null)continue
+                val mode=runCatching{X.callMethod(child,"getWindowingMode") as? Int}.getOrNull() ?: continue
+                if(mode!=5)continue
+                val layer=runCatching{X.getIntField(child,"mLastLayer")}.getOrDefault(-1)
+                if(layer>maxLayer)maxLayer=layer
+            }
+            val boosted=MiniStackPolicy.expandingLayer(maxLayer,leases.size) ?: return@synchronized
+            val tx=X.newInstance(X.findClass("android.view.SurfaceControl\$Transaction",loader))
+            try{
+                X.callMethod(task,"setLayer",tx,boosted)
+                X.callMethod(tx,"apply")
+            }finally{
+                runCatching{X.callMethod(tx,"close")}
+            }
+        }
+    }
     @Suppress("DEPRECATION")
+    private fun resyncFreeformLayers(focusTaskId:Int)=Guard.call("mini-resync-layers"){
+        val atm=atmService ?: return@call
+        synchronized(X.getObjectField(atm,"mGlobalLock")){
+            val root=X.getObjectField(atm,"mRootWindowContainer") ?: return@synchronized
+            val task=X.callMethod(root,"anyTaskForId",focusTaskId,0,null,false) ?: return@synchronized
+            val parent=X.callMethod(task,"getParent") ?: return@synchronized
+            val children=Guard.field(parent,"mChildren") as? List<*> ?: return@synchronized
+            val activeMultiStack=leases.size>=2
+            val targets=mutableListOf<Any>()
+            for(child in children){
+                if(child==null)continue
+                val mode=runCatching{X.callMethod(child,"getWindowingMode") as? Int}.getOrNull() ?: continue
+                val childId=runCatching{X.getIntField(child,"mTaskId")}.getOrNull() ?: continue
+                if(!MiniStackPolicy.resyncTaskLayer(mode,activeMultiStack,leases.containsKey(childId)))continue
+                runCatching{X.setIntField(child,"mLastLayer",-1)}
+                targets.add(child)
+            }
+            if(targets.isEmpty())return@synchronized
+            val tc=Guard.field(parent,"mTransitionController")
+            val hasBuilding=tc!=null&&X.findFieldIfExists(tc.javaClass,"mBuildingTransitionLayers")!=null
+            val prevBuilding=if(hasBuilding)X.getBooleanField(tc,"mBuildingTransitionLayers") else false
+            val txClass=X.findClass("android.view.SurfaceControl\$Transaction",loader)
+            val tx=X.newInstance(txClass)
+            var applyTx:Any?=null
+            try{
+                if(hasBuilding)X.setBooleanField(tc,"mBuildingTransitionLayers",true)
+                try{
+                    X.callMethod(parent,"assignChildLayers",tx)
+                }finally{
+                    if(hasBuilding)X.setBooleanField(tc,"mBuildingTransitionLayers",prevBuilding)
+                }
+                if(!activeMultiStack){
+                    for(child in targets){
+                        val syncState=runCatching{X.getIntField(child,"mSyncState")}.getOrDefault(0)
+                        val layer=runCatching{X.getIntField(child,"mLastLayer")}.getOrDefault(-1)
+                        if(syncState!=0&&layer>=0)X.callMethod(child,"setLayer",tx,layer)
+                    }
+                    X.callMethod(tx,"apply")
+                }else{
+                    applyTx=X.newInstance(txClass)
+                    for(child in targets){
+                        val layer=runCatching{X.getIntField(child,"mLastLayer")}.getOrDefault(-1)
+                        if(layer>=0)X.callMethod(child,"setLayer",applyTx,layer)
+                    }
+                    X.callMethod(applyTx,"apply")
+                }
+            }finally{
+                runCatching{X.callMethod(tx,"close")}
+                if(applyTx!=null)runCatching{X.callMethod(applyTx,"close")}
+            }
+            val order=targets.joinToString(","){c->
+                val cid=runCatching{X.getIntField(c,"mTaskId")}.getOrDefault(-1)
+                val layer=runCatching{X.getIntField(c,"mLastLayer")}.getOrDefault(-1)
+                "$cid:$layer"
+            }
+            Guard.info("freeform layers resynced focusTask=$focusTaskId count=${targets.size} activeStack=$activeMultiStack order=$order")
+        }
+    }
     private fun contentProfile(id:Int):Bundle? {
         val atm=atmService ?: return null
         return synchronized(X.getObjectField(atm,"mGlobalLock")){

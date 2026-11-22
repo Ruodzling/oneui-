@@ -76,12 +76,7 @@ public final class SideGesturePolicy {
             Set<String> excluded) {
         if (!settingsAvailable || !masterEnabled || !featureEnabled) return false;
         if (!shouldRedirectTarget(targetPkg)) return false;
-        return AppScopePolicy.includes(
-                targetPkg,
-                allApps,
-                demo,
-                selected == null ? Collections.emptySet() : selected,
-                excluded == null ? Collections.emptySet() : excluded);
+        return AppScopePolicy.includesInteraction(targetPkg, demo);
     }
 
     public static String launchDecisionReason(
@@ -97,12 +92,7 @@ public final class SideGesturePolicy {
         if (!settingsAvailable) return "settings-unavailable";
         if (!masterEnabled || !featureEnabled) return "disabled";
         if (!shouldRedirectTarget(targetPkg)
-                || !AppScopePolicy.includes(
-                        targetPkg,
-                        allApps,
-                        demo,
-                        selected == null ? Collections.emptySet() : selected,
-                        excluded == null ? Collections.emptySet() : excluded)) {
+                || !AppScopePolicy.includesInteraction(targetPkg, demo)) {
             return "excluded";
         }
         return accepted ? "fast-action" : "not-fast-action";

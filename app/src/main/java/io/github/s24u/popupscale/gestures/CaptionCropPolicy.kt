@@ -5,7 +5,7 @@ import kotlin.math.ceil
 /** Screen-frame Insets become window-container coordinates after the native surface scale. */
 object CaptionCropPolicy {
     // Hosts whose root wrapper (e.g. SwipeBackLayout) consumes captionBar height without applying topMargin
-    // leave the bottom caption strip transparent (square corners) and suffer top over-crop when cropped.
+    // leave the bottom strip transparent unless client captionBar insets are omitted; server top crop still applies.
     private val CLIENT_CAPTION_SUPPRESSED_PACKAGES=setOf("com.xingin.xhs")
     fun suppressesClientCaption(packageName:String?)=packageName in CLIENT_CAPTION_SUPPRESSED_PACKAGES
     @JvmOverloads fun activityRoot(root:LivePlacement.Bounds,task:LivePlacement.Bounds,caption:Int,

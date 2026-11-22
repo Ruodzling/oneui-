@@ -36,4 +36,11 @@ public final class AppScopePolicy {
         if (!isOrdinaryPackage(name) || excluded.contains(name)) return false;
         return allApps || selected.contains(name);
     }
+
+    /** Interactions apply to all ordinary packages regardless of scaling inclusion/exclusion. */
+    public static boolean includesInteraction(String name, boolean demo) {
+        if (isBlocked(name)) return false;
+        if (MODULE_PACKAGE.equals(name)) return demo;
+        return isOrdinaryPackage(name);
+    }
 }

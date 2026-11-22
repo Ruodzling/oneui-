@@ -31,6 +31,8 @@ public final class PopupScaleModule implements IXposedHookLoadPackage {
     private static final String TAG = "PopupScale";
     private final Set<Member> installed = new HashSet<>();
     private final Set<String> playerBypassLogged = new HashSet<>();
+    private final java.util.IdentityHashMap<Activity, Integer> maskedPlayerActivities = new java.util.IdentityHashMap<>();
+    private java.lang.reflect.Field activityMultiWindowField;
     private String packageName;
     private Object resourcesManager;
     private volatile Context appContext;
@@ -272,45 +274,165 @@ public final class PopupScaleModule implements IXposedHookLoadPackage {
         log("Douyin inline comment tracking and height compatibility installed");
     }
 
+    private static Activity findHostActivity(Context context) {
+        Context current = context;
+        for (int depth = 0; depth < 10 && current != null; depth++) {
+            if (current instanceof Activity) return (Activity) current;
+            if (!(current instanceof android.content.ContextWrapper)) return null;
+            current = ((android.content.ContextWrapper) current).getBaseContext();
+        }
+        return null;
+    }
+
+    private boolean enterPlayerMultiWindowMask(Activity activity) {
+        if (activityMultiWindowField == null || activity == null
+                || android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return false;
+        if (!PlayerCompatPolicy.playerActivity(packageName, activity.getClass().getName())) return false;
+        Integer existing = maskedPlayerActivities.get(activity);
+        if (existing != null) {
+            maskedPlayerActivities.put(activity, existing + 1);
+            return true;
+        }
+        reload();
+        Options current = options;
+        int mode = canvasController.windowMode(activity);
+        boolean selected = AppScopePolicy.includesInteraction(packageName, current.demo);
+        if (!PlayerCompatPolicy.eligible(packageName, current.enabled, current.diagnostic, selected, mode)) return false;
+        try {
+            if (!activityMultiWindowField.getBoolean(activity)) return false;
+            activityMultiWindowField.setBoolean(activity, false);
+            maskedPlayerActivities.put(activity, 1);
+            return true;
+        } catch (Throwable error) {
+            logFailure(error);
+            return false;
+        }
+    }
+
+    private void exitPlayerMultiWindowMask(Activity activity) {
+        if (activityMultiWindowField == null || activity == null
+                || android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return;
+        Integer existing = maskedPlayerActivities.get(activity);
+        if (existing == null) return;
+        if (existing > 1) {
+            maskedPlayerActivities.put(activity, existing - 1);
+            return;
+        }
+        maskedPlayerActivities.remove(activity);
+        try {
+            // Restore native field only while the Activity is still in freeform mode.
+            if (canvasController.windowMode(activity) == 5) {
+                activityMultiWindowField.setBoolean(activity, true);
+            }
+        } catch (Throwable error) {
+            logFailure(error);
+        }
+    }
+
     private void installPlayerCompatibility(ClassLoader loader) {
         if (!PlayerCompatPolicy.PACKAGE.equals(packageName)) return;
+        java.lang.reflect.Field field = XposedHelpers.findFieldIfExists(Activity.class, "mIsInMultiWindowMode");
+        if (field != null && field.getType() == boolean.class) {
+            field.setAccessible(true);
+            activityMultiWindowField = field;
+        }
         XposedHelpers.findAndHookMethod(Activity.class, "isInMultiWindowMode", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 try {
                     if (param.hasThrowable() || !Boolean.TRUE.equals(param.getResult())) return;
+                    if (!PlayerCompatPolicy.playerActivity(packageName, param.thisObject.getClass().getName())) return;
+                    StackTraceElement[] frames = Thread.currentThread().getStackTrace();
+                    if (!PlayerCompatPolicy.shouldBypassStack(frames)) return;
                     reload();
                     Options current = options;
-                    if (!PlayerCompatPolicy.playerActivity(packageName, param.thisObject.getClass().getName())) return;
                     int mode = canvasController.windowMode((Activity) param.thisObject);
-                    boolean selected = current.selects(packageName);
+                    boolean selected = AppScopePolicy.includesInteraction(packageName, current.demo);
                     boolean eligible = PlayerCompatPolicy.eligible(packageName, current.enabled,
                             current.diagnostic, selected, mode);
-                    // Only the verified player gate/configuration branches see false. In particular,
-                    // search, clipboard, background playback and true split-screen stay untouched.
-                    for (StackTraceElement caller : Thread.currentThread().getStackTrace()) {
+                    String source = "stack";
+                    for (StackTraceElement caller : frames) {
                         if (PlayerCompatPolicy.playerCaller(caller.getClassName(), caller.getMethodName())) {
-                            String source = caller.getClassName() + "." + caller.getMethodName();
-                            if (!eligible) {
-                                String decision = "player gate kept: " + source + " mode=" + mode
-                                        + " enabled=" + current.enabled + " diagnostic=" + current.diagnostic
-                                        + " selected=" + selected + " prefsReadable=" + preferences.getFile().canRead();
-                                synchronized (playerBypassLogged) {
-                                    if (playerBypassLogged.size() < 32 && playerBypassLogged.add(decision)) log(decision);
-                                }
-                                return;
-                            }
-                            param.setResult(false);
-                            synchronized (playerBypassLogged) {
-                                if (playerBypassLogged.add(source)) log("player freeform gate bypass: " + source);
-                            }
-                            return;
+                            source = caller.getClassName() + "." + caller.getMethodName();
+                            break;
                         }
+                    }
+                    if (!eligible) {
+                        String decision = "player gate kept: " + source + " mode=" + mode
+                                + " enabled=" + current.enabled + " diagnostic=" + current.diagnostic
+                                + " selected=" + selected + " prefsReadable=" + preferences.getFile().canRead();
+                        synchronized (playerBypassLogged) {
+                            if (playerBypassLogged.size() < 32 && playerBypassLogged.add(decision)) log(decision);
+                        }
+                        return;
+                    }
+                    param.setResult(false);
+                    synchronized (playerBypassLogged) {
+                        if (playerBypassLogged.size() < 32 && playerBypassLogged.add(source))
+                            log("player freeform gate bypass: " + source);
                     }
                 } catch (Throwable error) { logFailure(error); }
             }
         });
+        if (activityMultiWindowField != null) {
+            // Defeat ART AOT inlining of Activity.isInMultiWindowMode into unknown obfuscated
+            // helpers across Bilibili versions by masking the backing field only during
+            // synchronous player click/touch-up/configuration callbacks in freeform mode.
+            XposedHelpers.findAndHookMethod(View.class, "performClick", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        Activity activity = findHostActivity(((View) param.thisObject).getContext());
+                        if (enterPlayerMultiWindowMask(activity)) {
+                            param.setObjectExtra("popupscale.playerMask", activity);
+                        }
+                    } catch (Throwable error) { logFailure(error); }
+                }
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Object masked = param.getObjectExtra("popupscale.playerMask");
+                        if (masked instanceof Activity) exitPlayerMultiWindowMask((Activity) masked);
+                    } catch (Throwable error) { logFailure(error); }
+                }
+            });
+            XposedHelpers.findAndHookMethod(Activity.class, "dispatchTouchEvent",
+                    android.view.MotionEvent.class, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        android.view.MotionEvent ev = (android.view.MotionEvent) param.args[0];
+                        if (ev == null || ev.getActionMasked() != android.view.MotionEvent.ACTION_UP) return;
+                        Activity activity = (Activity) param.thisObject;
+                        if (enterPlayerMultiWindowMask(activity)) {
+                            param.setObjectExtra("popupscale.playerMask", activity);
+                        }
+                    } catch (Throwable error) { logFailure(error); }
+                }
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Object masked = param.getObjectExtra("popupscale.playerMask");
+                        if (masked instanceof Activity) exitPlayerMultiWindowMask((Activity) masked);
+                    } catch (Throwable error) { logFailure(error); }
+                }
+            });
+            XposedHelpers.findAndHookMethod(Activity.class, "onConfigurationChanged",
+                    Configuration.class, new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        Activity activity = (Activity) param.thisObject;
+                        if (enterPlayerMultiWindowMask(activity)) {
+                            param.setObjectExtra("popupscale.playerMask", activity);
+                        }
+                    } catch (Throwable error) { logFailure(error); }
+                }
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    try {
+                        Object masked = param.getObjectExtra("popupscale.playerMask");
+                        if (masked instanceof Activity) exitPlayerMultiWindowMask((Activity) masked);
+                    } catch (Throwable error) { logFailure(error); }
+                }
+            });
+        }
         deoptimizePlayerCallers(loader);
-        log("player freeform compatibility installed (Bili 9.17 verified callers)");
+        log("player freeform compatibility installed (general player-stack + scoped field mask="
+                + (activityMultiWindowField != null) + ")");
     }
 
     private void deoptimizePlayerCallers(ClassLoader loader) {
@@ -325,13 +447,18 @@ public final class PopupScaleModule implements IXposedHookLoadPackage {
         for (String name : PlayerCompatPolicy.playerCallerTypes()) {
             try {
                 Class<?> type = Class.forName(name, false, loader);
+                int count = 0;
                 for (Method method : type.getDeclaredMethods()) {
+                    int modifiers = method.getModifiers();
+                    if (java.lang.reflect.Modifier.isAbstract(modifiers)
+                            || java.lang.reflect.Modifier.isNative(modifiers)) continue;
                     if (!PlayerCompatPolicy.playerCaller(name, method.getName())) continue;
                     // Activity.isInMultiWindowMode is a one-field getter on this firmware.
-                    // Deoptimize only these verified callers so inlined checks reach our hook.
+                    // Deoptimize player callers so inlined checks reach our hook.
                     deoptimize.invoke(null, method);
-                    log("player caller deoptimized: " + name + "." + method.getName());
+                    count++;
                 }
+                if (count > 0) log("player caller deoptimized: " + name + " (" + count + " methods)");
             } catch (Throwable error) {
                 log("player caller deoptimization skipped " + name + ": " + error.getClass().getSimpleName());
             }

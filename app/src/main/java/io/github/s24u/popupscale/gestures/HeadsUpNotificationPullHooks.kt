@@ -148,18 +148,24 @@ class HeadsUpNotificationPullHooks(private val loader:ClassLoader,private val co
         hide(entry);detachObserver(entry)
         entry.bar.get()?.let{(it.parent as? android.view.ViewGroup)?.removeView(it)}
     }
+    private fun snapshotEntries():List<Entry> {
+        val out=ArrayList<Entry>()
+        val it=entries.values.iterator()
+        while(it.hasNext())out.add(it.next())
+        return out
+    }
     private fun attachSettings(c:Context){
         if(context!=null){if(!configured)fetchSettings();return}
         val app=c.applicationContext?:c;context=app
         app.registerReceiver(object:BroadcastReceiver(){
             override fun onReceive(c:Context,i:Intent){
                 // Broadcast is an invalidation signal only. Never trust supplied settings.
-                configured=false;entries.values.toList().forEach{hide(it)};fetchSettings(true)
+                configured=false;snapshotEntries().forEach{hide(it)};fetchSettings(true)
             }
         },IntentFilter(ModuleSettings.ACTION_SETTINGS_CHANGED),null,main,Context.RECEIVER_EXPORTED)
         app.registerReceiver(object:BroadcastReceiver(){
             override fun onReceive(c:Context,i:Intent){
-                entries.values.toList().forEach{bind(it);position(it)}
+                snapshotEntries().forEach{bind(it);position(it)}
                 if(i.action!=Intent.ACTION_SCREEN_OFF)fetchSettings(true)
             }
         },IntentFilter().apply{addAction(Intent.ACTION_SCREEN_OFF);addAction(Intent.ACTION_SCREEN_ON);
@@ -170,11 +176,11 @@ class HeadsUpNotificationPullHooks(private val loader:ClassLoader,private val co
             fresh.forEach{(k,v)->when(v){is Boolean->b.putBoolean(k,v);is Int->b.putInt(k,v);is String->b.putString(k,v)}}
             config.applyBundle(b);configured=true
             Guard.info("notification settings ready headsUp=true enabled=${config.enabled} option=${config.notificationPull}")
-            entries.values.toList().forEach{bind(it);position(it)}
+            snapshotEntries().forEach{bind(it);position(it)}
             // Do not hold back valid settings while discovering optional clone metadata.
             executor.execute{
                 runCatching{io.github.s24u.popupscale.CloneProfileRegistry.refresh(app)}
-                main.post{entries.values.toList().forEach{bind(it);position(it)}}
+                main.post{snapshotEntries().forEach{bind(it);position(it)}}
             }
         },{attempt->
             if(attempt<=2)Guard.info("notification settings temporarily unavailable headsUp=true attempt=$attempt; retry or unlock refresh pending")
@@ -187,7 +193,7 @@ class HeadsUpNotificationPullHooks(private val loader:ClassLoader,private val co
         val identity=heads?.owner(owner) ?: return false
         val c=root.context
         return NotificationPullPolicy.eligible(config.enabled,config.observe,config.notificationPull,
-            config.accepts(identity.first),pending.isActivity,
+            config.acceptsInteraction(identity.first),pending.isActivity,
             io.github.s24u.popupscale.AppScopePolicy.hasApplicationUid(identity.second),identity.second/100000,
             root.display?.displayId?:-1,c.getSystemService(KeyguardManager::class.java).isKeyguardLocked,
             c.getSystemService(PowerManager::class.java).isInteractive,

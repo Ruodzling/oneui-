@@ -46,7 +46,7 @@ public final class MainActivity extends MaterialSettingsActivity {
   private static final int[] NAV = {
     R.id.nav_overview, R.id.nav_apps, R.id.nav_gestures, R.id.nav_more
   };
-  private static final String[] TITLES = {"", "应用管理", "小窗手势", "更多设置"};
+  private static final String[] TITLES = {"", "应用缩放", "小窗手势", "更多设置"};
 
   @Override
   public void onCreate(Bundle state) {
@@ -413,7 +413,7 @@ public final class MainActivity extends MaterialSettingsActivity {
               .putString("packages", String.join("\n", selected))
               .putString("excluded_packages", String.join("\n", excluded)));
     } catch (RuntimeException bad) {
-      message("应用列表格式有误，请到更多设置中检查包名");
+      message("应用列表保存失败，请重新打开应用后重试");
       return false;
     }
   }
@@ -507,25 +507,18 @@ public final class MainActivity extends MaterialSettingsActivity {
     action(
         quick,
         R.drawable.ic_apps,
-        "应用管理",
+        "应用缩放管理",
         summary,
         () -> navigation.setSelectedItemId(R.id.nav_apps));
     divider(quick);
     action(
         quick,
-        R.drawable.ic_settings,
-        "缩放方式",
-        flag("system_scale_all", false) ? "系统统一管理 · 微信等兼容应用仍需作用域" : "应用内兼容缩放",
-        this::chooseEngine);
-    densityPresets(column);
-    LinearLayout gesture = section(column);
-    action(
-        gesture,
         R.drawable.ic_gesture,
         "手势与迷你窗",
-        flag("system_features", false) ? "控制条、挂起与贴边收纳" : "设置你的窗口交互",
+        flag("system_features", true) ? "控制条、挂起、堆叠与贴边收纳" : "设置你的窗口交互",
         () -> navigation.setSelectedItemId(R.id.nav_gestures));
-    TextView note = text("设置自动保存，重新打开目标应用后生效。", 12, muted());
+    densityPresets(column);
+    TextView note = text("设置自动保存；手势调整实时生效，缩放与无边框更改在重开目标应用后生效。", 12, muted());
     note.setPadding(dp(4), dp(4), dp(4), 0);
     column.addView(note);
   }
@@ -670,38 +663,49 @@ public final class MainActivity extends MaterialSettingsActivity {
 
   private void gestures(LinearLayout column) {
     LinearLayout master = section(column);
-    setting(master, "小窗手势", "随首页总开关生效", "system_features", false);
-    heading(column, "交互方式");
-    LinearLayout features = section(column);
-    setting(features, "窗口控制条", "拖动缩放 · 上甩关闭 · 下甩全屏 · 长按透明度", "system_handle", true);
-    divider(features);
-    setting(features, "上甩小窗退到后台", "开启后可从最近任务继续；关闭后上甩会移除当前任务", "handle_close_to_back", true);
-    divider(features);
-    setting(features, "顶部无边框", "去掉顶栏填充，保留上方蓝条拖动与菜单；重开小窗生效", "system_frameless", true);
-    divider(features);
-    setting(features, "上滑挂起", "从底部连续上滑，移向右上角提示区", "system_hang", true);
-    divider(features);
-    setting(features, "实时迷你窗", "保持内容运行，支持拖动与贴边收纳", "system_live", false);
-    divider(features);
-    setting(features, "迷你窗保持播放", "右上角小窗保留持续播放；兼容隐藏环境与未勾选作用域的应用", "mini_keep_playback", true, () -> showPage(page));
-    if (flag("mini_keep_playback", true)) {
-      divider(features);
-      action(features, R.drawable.ic_apps, "保持播放应用范围", miniPlaybackScopeSummary(), this::chooseMiniPlaybackScope);
+    setting(master, "小窗手势", "随首页总开关生效 · 对全部普通应用解锁", "system_features", true, () -> showPage(page));
+    if (flag("system_features", true)) {
+      heading(column, "控制条与外观");
+      LinearLayout controls = section(column);
+      setting(controls, "窗口控制条", "拖动缩放 · 上甩关闭 · 下甩全屏 · 长按调透明度", "system_handle", true, () -> showPage(page));
+      if (flag("system_handle", true)) {
+        divider(controls);
+        setting(controls, "上甩小窗退到后台", "开启后可从最近任务继续；关闭后上甩会直接移除任务", "handle_close_to_back", true);
+      }
+      divider(controls);
+      setting(controls, "顶部无边框", "隐藏顶栏填充，保留上方蓝条拖动与菜单；重开小窗生效", "system_frameless", true);
+
+      heading(column, "迷你窗");
+      LinearLayout mini = section(column);
+      setting(mini, "上滑挂起", "从底部连续上滑，移向右上角提示区挂起", "system_hang", true);
+      divider(mini);
+      setting(mini, "实时迷你窗", "保持内容运行，支持自由拖动、贴边收纳与多卡堆叠", "system_live", true, () -> showPage(page));
+      if (flag("system_live", true)) {
+        divider(mini);
+        setting(mini, "迷你窗保持播放", "挂起到右上角后继续播放，适合视频和直播应用", "mini_keep_playback", true, () -> showPage(page));
+        if (flag("mini_keep_playback", true)) {
+          divider(mini);
+          action(mini, R.drawable.ic_apps, "保持播放应用范围", miniPlaybackScopeSummary(), this::chooseMiniPlaybackScope);
+        }
+      }
+
+      heading(column, "通知与快捷启动");
+      LinearLayout entries = section(column);
+      setting(entries, "详细通知下拉小窗", "从详细通知横幅任意位置下拉即可小窗打开", "notification_pull_popup", true);
+      divider(entries);
+      setting(entries, "快速启动器直接小窗",
+          "通过 One Hand Operation + 快速启动器点开应用时直接以小窗打开",
+          SideGestureHook.PREF_KEY_FAST_ACTION_POPUP, true);
+      TextView ohoTip = text("需在 LSPosed 作用域中勾选 One Hand Operation +；长按图标仍可呼出分屏。", 12, muted());
+      ohoTip.setPadding(dp(4), dp(4), dp(4), 0);
+      column.addView(ohoTip);
+    } else {
+      TextView offTip = text("开启上方总开关后，可配置控制条、顶部无边框、迷你窗与通知手势。", 13, muted());
+      offTip.setPadding(dp(4), dp(6), dp(4), dp(4));
+      column.addView(offTip);
     }
-    divider(features);
-    setting(features, "详细通知下拉小窗", "从详细通知的任意位置向下滑动即可打开小窗", "notification_pull_popup", true);
-    divider(features);
-    action(features, R.drawable.ic_gesture, "发送测试消息", "详细通知用横条；简洁通知用原生下拉", () -> NotificationPullTestMessage.begin(this));
     LinearLayout guide = section(column);
-    action(guide, R.drawable.ic_gesture, "手势指南", "查看控制条和贴边操作", this::gestureGuide);
-    heading(column, "Good Lock 联动");
-    LinearLayout goodlock = section(column);
-    setting(goodlock, "快速启动器直接小窗",
-        "通过 One Hand Operation + 快速启动器点开应用时，直接以小窗 / 弹窗打开",
-        SideGestureHook.PREF_KEY_FAST_ACTION_POPUP, true);
-    TextView ohoTip = text("需在 LSPosed 作用域中勾选 One Hand Operation +；长按图标仍可呼出分屏。", 12, muted());
-    ohoTip.setPadding(dp(4), dp(4), dp(4), 0);
-    column.addView(ohoTip);
+    action(guide, R.drawable.ic_gesture, "手势指南", "查看控制条、迷你窗堆叠与贴边操作说明", this::gestureGuide);
   }
 
   private String miniPlaybackScopeSummary() {
@@ -759,13 +763,6 @@ public final class MainActivity extends MaterialSettingsActivity {
     divider(appearance);
     setting(
         appearance, "动态配色", "使用系统壁纸的 Material You 配色", "ui_dynamic_color", true, this::recreate);
-    heading(column, "高级与兼容");
-    LinearLayout tools = section(column);
-    action(tools, R.drawable.ic_apps, "按包名编辑", "高级应用列表与排除项", this::editPackages);
-    divider(tools);
-    action(tools, R.drawable.ic_check, "设备兼容性", "查看系统功能检测与未启用原因", this::showCompatibility);
-    divider(tools);
-    // Diagnostic export removed.
     heading(column, "关于");
     LinearLayout about = section(column);
     action(about, R.drawable.ic_overview, "版本与更新日志", "当前版本 " + BuildConfig.VERSION_NAME,
@@ -846,9 +843,8 @@ public final class MainActivity extends MaterialSettingsActivity {
         .setTitle("启用与使用")
         .setMessage(
             "1. 在 LSPosed 启用本模块，并保留系统框架、系统界面、One UI 主屏幕和权限控制器的作用域。首次配置后请执行软重启（临时 Root 用户请勿硬重启，以免掉 Root）。\n\n"
-                + "2. 回到首页打开总开关即可使用。首次安装默认系统统一管理、中档 500 dp，并启用控制条、上滑挂起和实时迷你窗；诊断模式默认关闭。\n\n"
-                + "3. 普通应用在本模块选择或排除。微信、抖音、微博的专用兼容需保留对应应用作用域；若目标应用开启了隐藏环境或未勾选应用作用域，可在“手势与迷你窗”中通过“迷你窗保持播放”保持右上角小窗播放。DevCheck 应用作用域保持关闭。切换缩放方式后重新打开目标应用。\n\n"
-                + "4. One Hand Operation + 快速启动器点图标开小窗，需要在 LSPosed 勾选 One Hand Operation +，并重新打开它。")
+                + "2. 回到首页打开总开关即可使用：在「应用缩放」中按需选择或排除需要缩放的应用；微信、抖音、微博如需完整适配，请在 LSPosed 中保留对应应用作用域。无边框、控制条、挂起和迷你窗默认对全部普通应用生效。\n\n"
+                + "3. 如需配合 One Hand Operation + 快速启动器点图标直接开小窗，请在 LSPosed 勾选 One Hand Operation + 并重新打开它。")
         .setPositiveButton("知道了", null)
         .show();
   }
@@ -898,11 +894,11 @@ public final class MainActivity extends MaterialSettingsActivity {
         .setTitle("小窗手势指南")
         .setMessage(
             "窗口控制条\n"
-                + "慢拖向内缩小，达到迷你尺寸后挂起；快速向内甩关闭，快速向外甩全屏。竖屏控制条在下方，横屏在朝向屏幕中央的一侧。\n\n"
-                + "迷你窗\n"
-                + "拖动或甩动可移动。慢拖到左右边缘收纳为图标，点击呼出；拖出上下边缘一半后松手关闭。\n\n"
+                + "慢拖向内缩小，达到迷你尺寸后自动挂起；快速向内甩关闭（或退到后台）；快速向外甩全屏；长按控制条可调节窗口透明度。竖屏控制条在下方，横屏在朝向屏幕中央的一侧。\n\n"
+                + "迷你窗与堆叠\n"
+                + "点击正面卡片展开为标准小窗；拖动或甩动可移动位置；慢拖到左右边缘收纳为贴边图标；拖出上下边缘一半后松手关闭。多个迷你窗会自动堆叠，左右滑动切换卡片，展开其中一张时其余卡片会自动归位右上角。\n\n"
                 + "标准小窗\n"
-                + "拖顶部横条到左右边缘可收纳，点击图标或向内拖动后松手可展开标准小窗。实时模式下是否持续播放取决于具体应用。\n\n停用模块前，请先恢复已挂起的小窗。")
+                + "拖顶部横条到左右边缘可贴边收纳，点击图标或向内拖出即可展开。停用模块前，请先恢复已挂起的小窗。")
         .setPositiveButton("知道了", null)
         .show();
   }
@@ -925,7 +921,7 @@ public final class MainActivity extends MaterialSettingsActivity {
     scroll.addView(fields);
     androidx.appcompat.app.AlertDialog dialog =
         new MaterialAlertDialogBuilder(this)
-            .setTitle("按包名编辑")
+            .setTitle("按包名编辑缩放应用")
             .setView(scroll)
             .setNegativeButton("取消", null)
             .setPositiveButton("保存", null)
